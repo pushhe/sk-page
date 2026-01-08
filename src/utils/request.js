@@ -55,7 +55,7 @@ service.interceptors.response.use(
   },
   (error) => {
     // 2. HTTP 网络级错误：处理 404, 500, 网络断开等
-    let msg = ''
+    let msg
     if (error.response) {
       switch (error.response.status) {
         case 401:
