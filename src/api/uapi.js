@@ -21,6 +21,6 @@ export function getHotBoard(type) {
     params: {
       type,
     },
-    loading: true,
+    loading: false,
   })
 }

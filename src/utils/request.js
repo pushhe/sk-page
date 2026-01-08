@@ -78,11 +78,7 @@ service.interceptors.response.use(
     }
 
     // 统一显示错误提示
-    ElMessage({
-      message: msg,
-      type: 'error',
-      duration: 5 * 1000,
-    })
+    ElMessage.error(msg)
 
     return Promise.reject(error)
   },

@@ -6,4 +6,13 @@ import HotBoardView from '@/views/HotBoardView.vue'
   <HotBoardView></HotBoardView>
 </template>
 
-<style scoped></style>
+<style scoped>
+html,
+body,
+#app {
+  height: 100vh;
+  width: 100vh;
+  margin: 0;
+  padding: 0;
+}
+</style>

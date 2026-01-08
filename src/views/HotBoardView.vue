@@ -54,12 +54,7 @@
                     >
                       <span class="rank-tag" :class="'rank-' + (index + 1)">{{ index + 1 }}</span>
 
-                      <el-link
-                        :href="item.url"
-                        target="_blank"
-                        class="hot-title"
-                        underline="hover"
-                      >
+                      <el-link :href="item.url" target="_blank" class="hot-title" underline="hover">
                         {{ item.title }}
                       </el-link>
                     </li>
@@ -157,7 +152,6 @@ const config = {
   其他: {
     weread: '微信读书热门书籍',
     weatheralarm: '天气预警信息',
-    earthquake: '地震速报',
     history: '历史上的今天',
   },
 }
