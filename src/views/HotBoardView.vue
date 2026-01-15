@@ -54,7 +54,7 @@
                     >
                       <span class="rank-tag" :class="'rank-' + (index + 1)">{{ index + 1 }}</span>
 
-                      <el-link :href="item.url" target="_blank" class="hot-title" underline="hover">
+                      <el-link :href="item.url" target="_blank" class="hot-title" underline="never">
                         {{ item.title }}
                       </el-link>
                     </li>
