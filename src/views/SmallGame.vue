@@ -1,6 +1,7 @@
 <template>
   <div
     class="game-wrapper"
+    :class="{ shake: isShaking }"
     @mousedown="handleMouseDown"
     @mouseup="handleMouseUp"
     @mouseleave="handleMouseUp"
@@ -17,38 +18,51 @@
       <div :class="['timer', { 'timer-warning': timeLeft <= 10 }]">TIME: {{ timeLeft }}s</div>
     </div>
 
-    <transition-group name="combo-fade">
-      <div
-        v-for="msg in comboMessages"
-        :key="msg.id"
-        class="combo-popup"
-        :style="{ left: msg.x + 'px', top: msg.y + 'px' }"
-      >
-        {{ msg.text }}
-      </div>
-    </transition-group>
+    <div class="combo-container">
+      <transition-group name="combo-fade">
+        <div
+          v-for="msg in comboMessages"
+          :key="msg.id"
+          class="combo-popup"
+          :style="{ left: msg.x + 'px', top: msg.y + 'px' }"
+        >
+          {{ msg.text }}
+        </div>
+      </transition-group>
+    </div>
 
     <div v-if="gameState === 'start'" class="overlay">
       <h1 class="title">FRUIT NINJA</h1>
-      <div class="config-panel">
-        <p class="config-hint">自定义素材 ({{ customImages.length }}/6)</p>
-        <input type="file" accept="image/*" @change="handleImageUpload" multiple id="fileInput" />
-        <label for="fileInput" class="upload-btn">上传自定义水果</label>
-        <div class="preview-group">
-          <div v-for="(img, index) in customImages" :key="index" class="preview-item">
-            <img :src="img.src" />
+      <div class="menu-card">
+        <div class="best-badge">BEST SCORE: {{ highScore }}</div>
+        <div class="config-section">
+          <p class="section-label">CUSTOM SKINS ({{ customImages.length }}/6)</p>
+          <div class="upload-controls">
+            <input
+              type="file"
+              accept="image/*"
+              @change="handleImageUpload"
+              multiple
+              id="fileInput"
+              style="display: none"
+            />
+            <label for="fileInput" class="upload-btn">UPLOAD</label>
+            <div class="preview-row">
+              <div v-for="(img, index) in customImages" :key="index" class="mini-thumb">
+                <img :src="img.src" />
+              </div>
+            </div>
           </div>
         </div>
+        <button class="menu-btn" @click="startGame">START GAME</button>
       </div>
-      <p class="high-score-display">最高纪录: {{ highScore }}</p>
-      <button class="menu-btn" @click="startGame">开始游戏</button>
     </div>
 
     <div v-if="gameState === 'over'" class="overlay">
-      <h2 class="title">TIME UP!</h2>
-      <p class="final-score">本次得分: {{ score }}</p>
-      <p v-if="isNewRecord" class="new-record">🎉 新 纪 录 🎉</p>
-      <button class="menu-btn" @click="startGame">再来一局</button>
+      <h2 class="title">TIME'S UP!</h2>
+      <div v-if="isNewRecord" class="new-record-badge">NEW RECORD!</div>
+      <p class="final-score">TOTAL SCORE: {{ score }}</p>
+      <button class="menu-btn auto-width" @click="startGame">PLAY AGAIN</button>
     </div>
 
     <canvas ref="canvasRef"></canvas>
@@ -63,62 +77,68 @@ const gameState = ref('start')
 const score = ref(0)
 const timeLeft = ref(60)
 const isScoreBeating = ref(false)
+const isShaking = ref(false)
 const isNewRecord = ref(false)
 const highScore = ref(Number(localStorage.getItem('fruit_ninja_high')) || 0)
-
 const isDragging = ref(false)
 const comboMessages = ref([])
 const customImages = ref([])
-let currentDragCombo = 0
-let comboLastPos = { x: 0, y: 0 }
-let comboTimer = null
 
+// --- 保持 Watcher 逻辑 ---
+watch(score, (newVal, oldVal) => {
+  if (newVal > oldVal) {
+    isScoreBeating.value = true
+    setTimeout(() => {
+      isScoreBeating.value = false
+    }, 150)
+  }
+})
+
+// --- Base64 音效数据 ---
+const sounds = {
+  slice:
+    'data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU1vT19ycnp6e3uAgYKCgoODg4ODg4ODg4ODg4ODg4ODg4Nzc3Nzc3Nzc3Nzc3NzcnJycnJycnJycnJycnJycnJycnJycXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFx',
+  boom: 'data:audio/wav;base64,UklGRjJvT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YTFvT19ERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERERE',
+  throw:
+    'data:audio/wav;base64,UklGRihvT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YRZvT18/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8',
+}
+
+const playSound = (type) => {
+  const audio = new Audio(sounds[type])
+  audio.volume = type === 'throw' ? 0.05 : 0.4
+  audio.play().catch(() => {})
+}
+
+// --- 逻辑参数 (恢复原版速度和频率) ---
+let currentDragCombo = 0
+let comboTimer = null
+let lastBladeColor = 'rgba(0, 230, 118, 0.9)'
 let fruits = []
 let particles = []
 let bladePoints = []
 let animationId = null
 let gameTimer = null
-const gravity = 0.12
+const gravity = 0.12 // 恢复原版重力
 
-watch(score, () => {
-  isScoreBeating.value = true
-  setTimeout(() => {
-    isScoreBeating.value = false
-  }, 150)
-})
-
-const handleImageUpload = (event) => {
-  const files = event.target.files
-  for (let file of files) {
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      const img = new Image()
-      img.src = e.target.result
-      img.onload = () => {
-        if (customImages.value.length < 6) customImages.value.push(img)
-      }
-    }
-    reader.readAsDataURL(file)
-  }
+const triggerShake = () => {
+  isShaking.value = true
+  setTimeout(() => (isShaking.value = false), 200)
 }
 
-// --- 核心实体类 ---
-
+// --- Entity Classes ---
 class Entity {
-  constructor(canvasWidth, canvasHeight, difficulty) {
-    this.radius = 42 // 稍微增大一点，视觉更饱满
-    this.x = Math.random() * (canvasWidth - 200) + 100
-    this.y = canvasHeight + this.radius
-    const speedBoost = 1 + difficulty * 0.25
-    const targetHeight = (Math.random() * 0.4 + 0.4) * canvasHeight
-    this.vy = -Math.sqrt(2 * gravity * targetHeight) * speedBoost
-    this.vx = (this.x < canvasWidth / 2 ? 1 : -1) * (Math.random() * 1.5 + 0.5) * speedBoost
+  constructor(cw, ch, diff) {
+    this.radius = 42
+    this.x = Math.random() * (cw - 200) + 100
+    this.y = ch + this.radius
+    const targetHeight = (Math.random() * 0.4 + 0.4) * ch
+    this.vy = -Math.sqrt(2 * gravity * targetHeight) * (1 + diff * 0.25) // 恢复原版速度
+    this.vx = (this.x < cw / 2 ? 1 : -1) * (Math.random() * 1.5 + 0.5) // 恢复原版速度
     this.isSliced = false
     this.opacity = 1
     this.rotation = Math.random() * Math.PI * 2
-    this.rotationSpeed = (Math.random() - 0.5) * 0.05
+    this.rotationSpeed = (Math.random() - 0.5) * 0.05 // 恢复原版旋转
   }
-
   update() {
     this.x += this.vx
     this.y += this.vy
@@ -130,151 +150,73 @@ class Entity {
 class Fruit extends Entity {
   constructor(cw, ch, diff, imgPool) {
     super(cw, ch, diff)
-    // 使用更高亮、更鲜艳的色系
-    const colors = [
-      '#ff4d4d',
-      '#4bff4b',
-      '#ffeb3b',
-      '#ff9800',
-      '#e040fb',
-      '#00B0FF', // 宝石蓝
-    ]
-
-    const poolSize = 6
-    const randomIndex = Math.floor(Math.random() * poolSize)
-
-    if (randomIndex < imgPool.length) {
-      this.image = imgPool[randomIndex]
-      this.color = '#fff'
-    } else {
-      this.image = null
-      this.color = colors[randomIndex % colors.length]
-    }
-
-    this.splitOffset = 0
-    this.leftHalf = { vx: 0, vy: 0, rotationSpeed: 0, rotation: 0, x: 0, y: 0 }
-    this.rightHalf = { vx: 0, vy: 0, rotationSpeed: 0, rotation: 0, x: 0, y: 0 }
+    const colors = ['#ff4d4d', '#4bff4b', '#ffeb3b', '#ff9800', '#e040fb', '#00B0FF']
+    const idx = Math.floor(Math.random() * colors.length)
+    this.image = idx < imgPool.length ? imgPool[idx] : null
+    this.originalColor = colors[idx]
+    this.color = this.image ? '#fff' : this.originalColor
+    this.leftHalf = {}
+    this.rightHalf = {}
   }
-
   slice() {
     this.isSliced = true
-    const ejectForce = 2.5 + Math.random() * 2
+    const force = 3 + Math.random() * 2
+    const common = { y: this.y, vy: this.vy - 1, rotation: this.rotation }
     this.leftHalf = {
-      vx: this.vx - ejectForce,
-      vy: this.vy - 1,
-      rotationSpeed: this.rotationSpeed - 0.12,
-      rotation: this.rotation,
+      ...common,
       x: this.x,
-      y: this.y,
+      vx: this.vx - force,
+      rotationSpeed: this.rotationSpeed - 0.1,
     }
     this.rightHalf = {
-      vx: this.vx + ejectForce,
-      vy: this.vy - 1,
-      rotationSpeed: this.rotationSpeed + 0.12,
-      rotation: this.rotation,
+      ...common,
       x: this.x,
-      y: this.y,
+      vx: this.vx + force,
+      rotationSpeed: this.rotationSpeed + 0.1,
     }
   }
-
   update() {
-    if (!this.isSliced) {
-      super.update()
-    } else {
-      this.leftHalf.x += this.leftHalf.vx
-      this.leftHalf.y += this.leftHalf.vy
-      this.leftHalf.vy += gravity
-      this.leftHalf.rotation += this.leftHalf.rotationSpeed
-      this.rightHalf.x += this.rightHalf.vx
-      this.rightHalf.y += this.rightHalf.vy
-      this.rightHalf.vy += gravity
-      this.rightHalf.rotation += this.rightHalf.rotationSpeed
-      this.splitOffset += 2
-      this.opacity -= 0.025
+    if (!this.isSliced) super.update()
+    else {
+      ;[this.leftHalf, this.rightHalf].forEach((h) => {
+        h.x += h.vx
+        h.y += h.vy
+        h.vy += gravity
+        h.rotation += h.rotationSpeed
+      })
+      this.opacity -= 0.03
     }
   }
-
   draw(ctx) {
     if (this.opacity <= 0) return
-    if (!this.isSliced) {
+    const drawPart = (data, mode) => {
       ctx.save()
-      ctx.translate(this.x, this.y)
-      ctx.rotate(this.rotation)
+      ctx.translate(data.x, data.y)
+      ctx.rotate(data.rotation)
       ctx.globalAlpha = this.opacity
-      this.drawClippedObject(ctx, 'full')
-      ctx.restore()
-    } else {
-      ctx.save()
-      ctx.translate(this.leftHalf.x, this.leftHalf.y)
-      ctx.rotate(this.leftHalf.rotation)
-      ctx.globalAlpha = this.opacity
-      this.drawClippedObject(ctx, 'left')
-      this.drawSliceSurface(ctx, 'left')
-      ctx.restore()
-      ctx.save()
-      ctx.translate(this.rightHalf.x, this.rightHalf.y)
-      ctx.rotate(this.rightHalf.rotation)
-      ctx.globalAlpha = this.opacity
-      this.drawClippedObject(ctx, 'right')
-      this.drawSliceSurface(ctx, 'right')
+      ctx.beginPath()
+      if (mode === 'full') ctx.arc(0, 0, this.radius, 0, Math.PI * 2)
+      else if (mode === 'left') ctx.arc(0, 0, this.radius, Math.PI * 0.5, Math.PI * 1.5)
+      else ctx.arc(0, 0, this.radius, Math.PI * 1.5, Math.PI * 0.5)
+      ctx.clip()
+      if (this.image)
+        ctx.drawImage(this.image, -this.radius, -this.radius, this.radius * 2, this.radius * 2)
+      else {
+        ctx.fillStyle = this.color
+        ctx.fill()
+        const g = ctx.createRadialGradient(-10, -10, 0, -10, -10, this.radius * 1.2)
+        g.addColorStop(0, 'rgba(255,255,255,0.4)')
+        g.addColorStop(1, 'rgba(255,255,255,0)')
+        ctx.fillStyle = g
+        ctx.fill()
+      }
       ctx.restore()
     }
-  }
-
-  drawClippedObject(ctx, mode) {
-    ctx.save()
-    ctx.beginPath()
-    if (mode === 'full') ctx.arc(0, 0, this.radius, 0, Math.PI * 2)
-    else if (mode === 'left') ctx.arc(0, 0, this.radius, Math.PI * 0.5, Math.PI * 1.5)
-    else ctx.arc(0, 0, this.radius, Math.PI * 1.5, Math.PI * 0.5)
-    ctx.clip()
-
-    if (this.image) {
-      ctx.drawImage(this.image, -this.radius, -this.radius, this.radius * 2, this.radius * 2)
-    } else {
-      ctx.fillStyle = this.color
-      ctx.fill()
+    if (!this.isSliced) drawPart(this, 'full')
+    else {
+      drawPart(this.leftHalf, 'left')
+      drawPart(this.rightHalf, 'right')
     }
-
-    // --- 升级版亮眼光影 ---
-    // 1. 底层环境遮罩 (让边缘深邃)
-    const shadow = ctx.createRadialGradient(0, 0, this.radius * 0.6, 0, 0, this.radius)
-    shadow.addColorStop(0, 'rgba(0,0,0,0)')
-    shadow.addColorStop(1, 'rgba(0,0,0,0.3)')
-    ctx.fillStyle = shadow
-    ctx.fill()
-
-    // 2. 核心顶部高光点 (玻璃感)
-    const highlight = ctx.createRadialGradient(
-      -this.radius * 0.35,
-      -this.radius * 0.35,
-      0,
-      -this.radius * 0.35,
-      -this.radius * 0.35,
-      this.radius * 1.1,
-    )
-    highlight.addColorStop(0, 'rgba(255, 255, 255, 0.7)')
-    highlight.addColorStop(0.2, 'rgba(255, 255, 255, 0.3)')
-    highlight.addColorStop(0.6, 'rgba(255, 255, 255, 0)')
-    ctx.fillStyle = highlight
-    ctx.fill()
-
-    ctx.restore()
-  }
-
-  drawSliceSurface(ctx, side) {
-    ctx.save()
-    ctx.beginPath()
-    const thickness = 6
-    if (side === 'left')
-      ctx.ellipse(thickness / 2, 0, thickness / 2, this.radius, 0, 0, Math.PI * 2)
-    else ctx.ellipse(-thickness / 2, 0, thickness / 2, this.radius, 0, 0, Math.PI * 2)
-
-    ctx.fillStyle = '#FFFFFF'
-    ctx.shadowBlur = 8
-    ctx.shadowColor = 'rgba(255,255,255,0.6)'
-    ctx.fill()
-    ctx.restore()
   }
 }
 
@@ -285,7 +227,7 @@ class Bomb extends Entity {
   }
   update() {
     super.update()
-    this.tick += 0.25
+    this.tick += 0.2
     if (this.isSliced) this.opacity -= 0.12
   }
   draw(ctx) {
@@ -294,32 +236,28 @@ class Bomb extends Entity {
     ctx.translate(this.x, this.y)
     ctx.rotate(this.rotation)
     ctx.globalAlpha = this.opacity
-    const pulse = Math.sin(this.tick) * 8 + 12
-    const grad = ctx.createRadialGradient(0, 0, this.radius, 0, 0, this.radius + pulse)
-    grad.addColorStop(0, 'rgba(255, 48, 48, 0.7)')
-    grad.addColorStop(1, 'rgba(255, 0, 0, 0)')
+    const pulse = Math.sin(this.tick) * 10 + 10
     ctx.beginPath()
     ctx.arc(0, 0, this.radius + pulse, 0, Math.PI * 2)
-    ctx.fillStyle = grad
+    ctx.fillStyle = 'rgba(255,0,0,0.2)'
     ctx.fill()
-
-    // 引信
-    ctx.beginPath()
-    ctx.moveTo(0, -this.radius)
-    ctx.quadraticCurveTo(10, -this.radius - 15, 18, -this.radius - 8)
-    ctx.strokeStyle = '#8d6e63'
-    ctx.lineWidth = 4
-    ctx.stroke()
-    if (Math.random() > 0.3) {
-      ctx.beginPath()
-      ctx.arc(18, -this.radius - 8, 5, 0, Math.PI * 2)
-      ctx.fillStyle = '#FFEA00'
-      ctx.fill()
-    }
     ctx.beginPath()
     ctx.arc(0, 0, this.radius, 0, Math.PI * 2)
     ctx.fillStyle = '#1a1a1a'
     ctx.fill()
+    // 炸弹引信完整代码
+    ctx.beginPath()
+    ctx.moveTo(0, -this.radius)
+    ctx.quadraticCurveTo(15, -this.radius - 15, 20, -this.radius - 5)
+    ctx.strokeStyle = '#8d6e63'
+    ctx.lineWidth = 4
+    ctx.stroke()
+    if (Math.random() > 0.2) {
+      ctx.beginPath()
+      ctx.arc(20, -this.radius - 5, 4 + Math.random() * 4, 0, Math.PI * 2)
+      ctx.fillStyle = Math.random() > 0.5 ? '#ffeb3b' : '#ff9800'
+      ctx.fill()
+    }
     ctx.restore()
   }
 }
@@ -329,15 +267,15 @@ class Particle {
     this.x = x
     this.y = y
     this.color = color
-    this.radius = Math.random() * 5
-    this.vx = (Math.random() - 0.5) * 14
-    this.vy = (Math.random() - 0.5) * 14
+    this.radius = Math.random() * 4 + 1
+    this.vx = (Math.random() - 0.5) * 16
+    this.vy = (Math.random() - 0.5) * 16
     this.opacity = 1
   }
   update() {
     this.x += this.vx
     this.y += this.vy
-    this.opacity -= 0.035
+    this.opacity -= 0.04
   }
   draw(ctx) {
     ctx.save()
@@ -350,62 +288,14 @@ class Particle {
   }
 }
 
-// --- 逻辑控制 ---
-
-const handleMouseDown = (e) => {
-  if (gameState.value !== 'playing') return
-  isDragging.value = true
-  bladePoints = [{ x: e.clientX, y: e.clientY }]
-}
-
-const handleMouseUp = () => {
-  isDragging.value = false
-  if (currentDragCombo >= 3) showComboEffect(currentDragCombo)
-  clearTimeout(comboTimer)
-  currentDragCombo = 0
-  bladePoints = []
-}
-
-const handleMouseMove = (e) => {
-  if (gameState.value !== 'playing' || !isDragging.value) return
-  bladePoints.push({ x: e.clientX, y: e.clientY })
-  if (bladePoints.length > 8) bladePoints.shift()
-}
-
-const handleTouchStart = (e) => {
-  if (gameState.value !== 'playing') return
-  isDragging.value = true
-  bladePoints = [{ x: e.touches[0].clientX, y: e.touches[0].clientY }]
-}
-
-const handleTouchMove = (e) => {
-  if (gameState.value !== 'playing' || !isDragging.value) return
-  bladePoints.push({ x: e.touches[0].clientX, y: e.touches[0].clientY })
-  if (bladePoints.length > 8) bladePoints.shift()
-}
-
-const showComboEffect = (count) => {
-  const bonus = count * 5
-  score.value += bonus
-  const id = Date.now()
-  comboMessages.value.push({
-    id,
-    x: comboLastPos.x,
-    y: comboLastPos.y - 60,
-    text: `${count} COMBO! +${bonus}`,
-  })
-  setTimeout(() => {
-    comboMessages.value = comboMessages.value.filter((m) => m.id !== id)
-  }, 800)
-}
-
+// --- Lifecycle ---
 const startGame = () => {
   score.value = 0
   timeLeft.value = 60
-  isNewRecord.value = false
   fruits = []
   particles = []
-  bladePoints = []
+  currentDragCombo = 0
+  isNewRecord.value = false
   gameState.value = 'playing'
   if (gameTimer) clearInterval(gameTimer)
   gameTimer = setInterval(() => {
@@ -415,12 +305,52 @@ const startGame = () => {
 }
 
 const endGame = () => {
-  gameState.value = 'over'
   clearInterval(gameTimer)
+  gameState.value = 'over'
   if (score.value > highScore.value) {
-    highScore.value = score.value
     isNewRecord.value = true
+    highScore.value = score.value
     localStorage.setItem('fruit_ninja_high', score.value)
+  }
+}
+
+const handleImageUpload = (e) => {
+  const files = e.target.files
+  for (let f of files) {
+    const r = new FileReader()
+    r.onload = (ev) => {
+      const img = new Image()
+      img.src = ev.target.result
+      img.onload = () => {
+        if (customImages.value.length < 6) customImages.value.push(img)
+      }
+    }
+    r.readAsDataURL(f)
+  }
+}
+
+const handleMouseDown = (e) => {
+  isDragging.value = true
+  bladePoints = [{ x: e.clientX, y: e.clientY }]
+}
+const handleMouseMove = (e) => {
+  if (isDragging.value) {
+    bladePoints.push({ x: e.clientX, y: e.clientY })
+    if (bladePoints.length > 12) bladePoints.shift()
+  }
+}
+const handleMouseUp = () => {
+  isDragging.value = false
+  bladePoints = []
+}
+const handleTouchStart = (e) => {
+  isDragging.value = true
+  bladePoints = [{ x: e.touches[0].clientX, y: e.touches[0].clientY }]
+}
+const handleTouchMove = (e) => {
+  if (isDragging.value) {
+    bladePoints.push({ x: e.touches[0].clientX, y: e.touches[0].clientY })
+    if (bladePoints.length > 12) bladePoints.shift()
   }
 }
 
@@ -438,13 +368,12 @@ onMounted(() => {
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     if (gameState.value === 'playing') {
       const progress = (60 - timeLeft.value) / 60
-      let fruitProb = 0.02 + progress * 0.035
-      let bombProb = 0.006 + progress * 0.016
-
-      const rand = Math.random()
-      if (rand < fruitProb)
+      // 恢复原版出现频率
+      if (Math.random() < 0.035 + progress * 0.035) {
         fruits.push(new Fruit(canvas.width, canvas.height, progress, customImages.value))
-      else if (rand < fruitProb + bombProb)
+        playSound('throw')
+      }
+      if (Math.random() < 0.006 + progress * 0.015)
         fruits.push(new Bomb(canvas.width, canvas.height, progress))
 
       particles.forEach((p, i) => {
@@ -458,42 +387,72 @@ onMounted(() => {
         f.update()
         f.draw(ctx)
         if (!f.isSliced && isDragging.value) {
+          let hasSlicedThisFrame = false
           bladePoints.forEach((p) => {
-            if (Math.hypot(f.x - p.x, f.y - p.y) < f.radius) {
+            if (!hasSlicedThisFrame && Math.hypot(f.x - p.x, f.y - p.y) < f.radius) {
               if (f instanceof Bomb) {
                 f.isSliced = true
+                triggerShake()
+                playSound('boom')
                 score.value = Math.max(0, score.value - 50)
                 currentDragCombo = 0
-                for (let j = 0; j < 35; j++) particles.push(new Particle(f.x, f.y, '#FF3D00'))
+                hasSlicedThisFrame = true
               } else {
                 f.slice()
+                playSound('slice')
                 score.value += 10
-                if (currentDragCombo === 0) {
-                  comboTimer = setTimeout(() => {
-                    if (currentDragCombo >= 3) showComboEffect(currentDragCombo)
-                    currentDragCombo = 0
-                  }, 300)
-                }
+                lastBladeColor = f.originalColor
+                for (let j = 0; j < 15; j++) particles.push(new Particle(f.x, f.y, f.originalColor))
                 currentDragCombo++
-                comboLastPos = { x: f.x, y: f.y }
-                for (let j = 0; j < 18; j++) particles.push(new Particle(f.x, f.y, f.color))
+                hasSlicedThisFrame = true
+                if (comboTimer) clearTimeout(comboTimer)
+                // 重点：仅修改此处判定窗口为 200ms
+                comboTimer = setTimeout(() => {
+                  if (currentDragCombo >= 3) {
+                    const bonus = currentDragCombo * 5
+                    score.value += bonus
+                    const id = Date.now()
+                    comboMessages.value.push({
+                      id,
+                      x: f.x,
+                      y: f.y,
+                      text: `${currentDragCombo} HIT COMBO! +${bonus}`,
+                    })
+                    setTimeout(() => {
+                      comboMessages.value = comboMessages.value.filter((m) => m.id !== id)
+                    }, 600)
+                  }
+                  currentDragCombo = 0
+                }, 200)
               }
             }
           })
         }
-        if (f.opacity <= 0 || f.y > canvas.height + 150) fruits.splice(i, 1)
+        if (f.opacity <= 0 || f.y > canvas.height + 200) fruits.splice(i, 1)
       }
 
       if (isDragging.value && bladePoints.length > 1) {
         ctx.save()
         ctx.beginPath()
         ctx.moveTo(bladePoints[0].x, bladePoints[0].y)
-        bladePoints.forEach((p) => ctx.lineTo(p.x, p.y))
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)'
-        ctx.lineWidth = 7
+        for (let i = 1; i < bladePoints.length; i++) {
+          ctx.lineTo(bladePoints[i].x, bladePoints[i].y)
+        }
+        ctx.strokeStyle = lastBladeColor
+        ctx.lineWidth = 10
         ctx.lineCap = 'round'
-        ctx.shadowBlur = 18
-        ctx.shadowColor = '#00B0FF'
+        ctx.lineJoin = 'round'
+        ctx.shadowBlur = 20
+        ctx.shadowColor = lastBladeColor
+        ctx.stroke()
+        ctx.beginPath()
+        ctx.moveTo(bladePoints[0].x, bladePoints[0].y)
+        for (let i = 1; i < bladePoints.length; i++) {
+          ctx.lineTo(bladePoints[i].x, bladePoints[i].y)
+        }
+        ctx.strokeStyle = '#fff'
+        ctx.lineWidth = 3
+        ctx.shadowBlur = 0
         ctx.stroke()
         ctx.restore()
       }
@@ -502,11 +461,9 @@ onMounted(() => {
   }
   gameLoop()
 })
-
 onUnmounted(() => {
   cancelAnimationFrame(animationId)
   clearInterval(gameTimer)
-  clearTimeout(comboTimer)
 })
 </script>
 
@@ -514,196 +471,237 @@ onUnmounted(() => {
 .game-wrapper {
   width: 100vw;
   height: 100vh;
-  background: radial-gradient(circle at center, #1a1a1a 0%, #050505 100%);
+  background: #080808;
   position: relative;
   overflow: hidden;
-  cursor: crosshair;
   touch-action: none;
-  user-select: none;
+  cursor: crosshair;
 }
+.shake {
+  animation: shake-kf 0.2s infinite;
+}
+@keyframes shake-kf {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  25% {
+    transform: translate(6px, 6px);
+  }
+  75% {
+    transform: translate(-6px, -6px);
+  }
+}
+
 .stats-layer {
   position: absolute;
-  top: 0;
-  left: 0;
+  top: 20px;
   width: 100%;
-  height: 100px;
-  padding: 0 40px;
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  padding: 0 50px;
+  color: white;
+  z-index: 50;
   pointer-events: none;
-  z-index: 15;
   box-sizing: border-box;
 }
 .score {
-  font-family: 'Arial Black', sans-serif;
-  font-size: 42px;
+  font-size: 44px;
+  font-family: 'Arial Black';
   color: #00e676;
-  text-shadow: 0 0 15px rgba(0, 230, 118, 0.5);
-  transition: transform 0.1s ease;
+  text-shadow: 0 0 10px rgba(0, 230, 118, 0.5);
+  transition: transform 0.15s;
 }
 .beat-animation {
-  transform: scale(1.25);
-  color: #fff;
+  transform: scale(1.2);
 }
 .timer {
-  font-family: 'Arial Black', sans-serif;
-  font-size: 38px;
-  color: #fff;
+  font-size: 40px;
+  font-family: 'Arial Black';
 }
 .timer-warning {
-  color: #ff1744;
-  animation: blink 0.5s infinite;
-  text-shadow: 0 0 20px rgba(255, 23, 68, 0.8);
-}
-
-.config-panel {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  padding: 20px;
-  border-radius: 16px;
-  margin-bottom: 25px;
-  text-align: center;
-  width: 340px;
-}
-.config-hint {
-  margin-bottom: 12px;
-  font-size: 14px;
-  color: #aaa;
-}
-.upload-btn {
-  display: inline-block;
-  padding: 10px 24px;
-  background: linear-gradient(135deg, #00b0ff 0%, #0091ea 100%);
-  color: white;
-  border-radius: 25px;
-  cursor: pointer;
-  margin-bottom: 15px;
-  font-weight: bold;
-  font-size: 14px;
-  box-shadow: 0 4px 15px rgba(0, 176, 255, 0.3);
-  transition: transform 0.2s;
-}
-.upload-btn:hover {
-  transform: scale(1.05);
-}
-#fileInput {
-  display: none;
-}
-.preview-group {
-  display: flex;
-  gap: 10px;
-  justify-content: center;
-  flex-wrap: wrap;
-}
-.preview-item img {
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  border: 2px solid #00e676;
-  object-fit: cover;
-  box-shadow: 0 0 10px rgba(0, 230, 118, 0.3);
-}
-
-.combo-popup {
-  position: absolute;
-  pointer-events: none;
-  color: #ffea00;
-  font-family: 'Arial Black';
-  font-size: 36px;
-  text-shadow: 0 0 15px rgba(255, 234, 0, 0.8);
-  z-index: 30;
-  transform: translate(-50%, -50%);
-}
-.combo-fade-enter-active {
-  animation: combo-in 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-}
-.combo-fade-leave-active {
-  animation: combo-out 0.5s ease-in forwards;
-}
-
-@keyframes combo-in {
-  0% {
-    transform: translate(-50%, 20px) scale(0);
-    opacity: 0;
-  }
-  100% {
-    transform: translate(-50%, -60px) scale(1);
-    opacity: 1;
-  }
-}
-@keyframes combo-out {
-  100% {
-    transform: translate(-50%, -120px) scale(1.4);
-    opacity: 0;
-  }
+  color: #ff4d4d;
+  animation: flash 0.5s infinite alternate;
 }
 
 .overlay {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.9);
+  background: rgba(0, 0, 0, 0.95);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  z-index: 20;
+  z-index: 80;
   color: white;
+  text-align: center;
 }
 .title {
-  font-size: 72px;
-  color: #ff1744;
+  font-size: 80px;
+  color: #ff4d4d;
   font-family: 'Arial Black';
-  margin-bottom: 15px;
-  text-shadow: 0 0 30px rgba(255, 23, 68, 0.5);
-}
-.high-score-display {
-  font-size: 26px;
-  color: #ffea00;
-  margin-bottom: 25px;
-  opacity: 0.9;
-}
-.new-record {
-  color: #00e676;
-  font-size: 32px;
-  margin-bottom: 25px;
-  animation: bounce 0.8s infinite;
-  font-weight: bold;
-  text-shadow: 0 0 20px rgba(0, 230, 118, 0.6);
+  margin-bottom: 20px;
+  text-shadow: 4px 4px #000;
 }
 
-@keyframes blink {
-  50% {
-    opacity: 0.3;
-  }
+.menu-card {
+  background: rgba(255, 255, 255, 0.05);
+  padding: 40px;
+  border-radius: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  width: 450px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 30px;
+  box-sizing: border-box;
 }
-@keyframes bounce {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-15px);
-  }
+.best-badge {
+  font-size: 26px;
+  color: #ffd600;
+  font-family: 'Arial Black';
+}
+
+.config-section {
+  width: 100%;
+  text-align: left;
+}
+.section-label {
+  font-size: 12px;
+  font-weight: bold;
+  color: #aaa;
+  margin-bottom: 10px;
+}
+.upload-controls {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 15px;
+  border-radius: 15px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.upload-btn {
+  flex-shrink: 0;
+  padding: 10px 15px;
+  background: #00b0ff;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.preview-row {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.mini-thumb {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid #00e676;
+  overflow: hidden;
+}
+.mini-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .menu-btn {
-  padding: 20px 60px;
-  font-size: 26px;
-  background: linear-gradient(135deg, #ff1744 0%, #d50000 100%);
+  width: 100%;
+  padding: 20px;
+  font-size: 24px;
+  background: #ff4d4d;
+  border-radius: 15px;
   color: white;
-  border: none;
-  border-radius: 50px;
   cursor: pointer;
   font-family: 'Arial Black';
-  box-shadow: 0 6px 20px rgba(255, 23, 68, 0.4);
-  transition: all 0.2s;
+  border: none;
+  transition: 0.2s;
+  box-sizing: border-box;
+}
+.menu-btn.auto-width {
+  width: auto;
+  padding-left: 50px;
+  padding-right: 50px;
 }
 .menu-btn:hover {
-  transform: scale(1.1);
-  box-shadow: 0 8px 25px rgba(255, 23, 68, 0.6);
+  background: #ff6666;
+  transform: translateY(-3px);
+  box-shadow: 0 10px 20px rgba(255, 77, 77, 0.4);
+}
+
+.final-score {
+  font-size: 32px;
+  margin: 20px 0;
+  font-family: 'Arial Black';
+  color: #00e676;
+}
+.new-record-badge {
+  background: #ffd600;
+  color: #000;
+  padding: 10px 30px;
+  border-radius: 10px;
+  font-weight: bold;
+  margin-bottom: 10px;
+  animation: bounce 0.5s infinite alternate;
+}
+
+@keyframes bounce {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.1);
+  }
+}
+@keyframes flash {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0.6;
+    transform: scale(1.1);
+  }
+}
+
+.combo-popup {
+  position: absolute;
+  color: #ffeb3b;
+  font-family: 'Arial Black';
+  font-size: 36px;
+  text-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  z-index: 60;
 }
 canvas {
   display: block;
+}
+.combo-fade-enter-active {
+  animation: combo-in 0.6s ease-out;
+}
+.combo-fade-leave-active {
+  animation: combo-out 0.4s ease-in forwards;
+}
+@keyframes combo-in {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 0) scale(0.5);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -60px) scale(1.1);
+  }
+}
+@keyframes combo-out {
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -120px) scale(1.3);
+  }
 }
 </style>
