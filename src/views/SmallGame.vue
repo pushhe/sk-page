@@ -47,9 +47,8 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 
-// --- 响应式状态 ---
 const canvasRef = ref(null)
 const gameState = ref('start')
 const score = ref(0)
@@ -67,29 +66,17 @@ let comboTimer = null
 let fruits = []
 let particles = []
 let bladePoints = []
-let animationId = null
-let gameTimer = null
+let animationId = null // 关键：用于取消帧动画
+let gameTimer = null // 关键：用于取消倒计时
 const gravity = 0.12
 
-// --- 碰撞检测核心算法 ---
-/**
- * 检测线段 (p1, p2) 是否与圆 (circle) 相交
- * 解决高速划动下“跳帧”切不到水果的问题
- */
-const checkLineCircleCollision = (p1, p2, circle) => {
-  const { x, y, radius } = circle
-  const distSq = Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2)
-  if (distSq === 0) return Math.hypot(p1.x - x, p1.y - y) < radius
-
-  let t = ((x - p1.x) * (p2.x - p1.x) + (y - p1.y) * (p2.y - p1.y)) / distSq
-  t = Math.max(0, Math.min(1, t))
-
-  const closestX = p1.x + t * (p2.x - p1.x)
-  const closestY = p1.y + t * (p2.y - p1.y)
-  const distance = Math.hypot(closestX - x, closestY - y)
-
-  return distance < radius
-}
+// 监听分数变化产生跳动效果
+watch(score, () => {
+  isScoreBeating.value = true
+  setTimeout(() => {
+    isScoreBeating.value = false
+  }, 150)
+})
 
 // --- 实体类 ---
 class Entity {
@@ -139,6 +126,10 @@ class Fruit extends Entity {
       ctx.arc(0, 0, this.radius, 0, Math.PI * 2)
       ctx.fillStyle = this.color
       ctx.fill()
+      ctx.fillStyle = 'rgba(255,255,255,0.3)'
+      ctx.beginPath()
+      ctx.arc(-10, -10, 8, 0, Math.PI * 2)
+      ctx.fill()
     } else {
       const drawHalf = (offset, s, e) => {
         ctx.beginPath()
@@ -161,7 +152,7 @@ class Bomb extends Entity {
   }
   update() {
     super.update()
-    this.tick += 0.2 // 火花闪烁速度
+    this.tick += 0.15
     if (this.isSliced) this.opacity -= 0.1
   }
   draw(ctx) {
@@ -170,57 +161,30 @@ class Bomb extends Entity {
     ctx.translate(this.x, this.y)
     ctx.rotate(this.rotation)
     ctx.globalAlpha = this.opacity
-
-    // 1. 绘制红色的危险预警光晕
-    const pulse = Math.sin(this.tick) * 5 + 10
+    const pulse = Math.sin(this.tick) * 5 + 12
     const grad = ctx.createRadialGradient(0, 0, this.radius, 0, 0, this.radius + pulse)
-    grad.addColorStop(0, 'rgba(255, 0, 0, 0.4)')
+    grad.addColorStop(0, 'rgba(255, 0, 0, 0.8)')
     grad.addColorStop(1, 'rgba(255, 0, 0, 0)')
     ctx.beginPath()
     ctx.arc(0, 0, this.radius + pulse, 0, Math.PI * 2)
     ctx.fillStyle = grad
     ctx.fill()
-
-    // 2. 绘制炸弹主体（黑色圆球）
+    ctx.beginPath()
+    ctx.moveTo(0, -this.radius)
+    ctx.quadraticCurveTo(10, -this.radius - 10, 15, -this.radius - 5)
+    ctx.strokeStyle = '#8d6e63'
+    ctx.lineWidth = 4
+    ctx.stroke()
+    if (Math.random() > 0.2) {
+      ctx.beginPath()
+      ctx.arc(15, -this.radius - 5, 4, 0, Math.PI * 2)
+      ctx.fillStyle = '#ffeb3b'
+      ctx.fill()
+    }
     ctx.beginPath()
     ctx.arc(0, 0, this.radius, 0, Math.PI * 2)
     ctx.fillStyle = '#222'
     ctx.fill()
-
-    // 给球体加一点高光，增加质感
-    ctx.beginPath()
-    ctx.arc(-10, -10, 8, 0, Math.PI * 2)
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.15)'
-    ctx.fill()
-
-    // 3. 绘制引信（那根绳子）
-    ctx.beginPath()
-    ctx.moveTo(0, -this.radius)
-    ctx.quadraticCurveTo(15, -this.radius - 15, 20, -this.radius - 5)
-    ctx.strokeStyle = '#8d6e63'
-    ctx.lineWidth = 3
-    ctx.stroke()
-
-    // 4. 绘制燃烧的火花（动态闪烁）
-    if (!this.isSliced) {
-      const sparkX = 20
-      const sparkY = -this.radius - 5
-
-      // 黄色核心
-      ctx.beginPath()
-      ctx.arc(sparkX, sparkY, 4 * (0.8 + Math.random() * 0.4), 0, Math.PI * 2)
-      ctx.fillStyle = '#ffeb3b'
-      ctx.fill()
-
-      // 橙色外圈发光
-      ctx.shadowBlur = 10
-      ctx.shadowColor = '#ff5722'
-      ctx.beginPath()
-      ctx.arc(sparkX, sparkY, 7 * (0.8 + Math.random() * 0.4), 0, Math.PI * 2)
-      ctx.fillStyle = 'rgba(255, 87, 34, 0.6)'
-      ctx.fill()
-    }
-
     ctx.restore()
   }
 }
@@ -251,7 +215,25 @@ class Particle {
   }
 }
 
-// --- 游戏逻辑 ---
+// --- 交互与游戏控制 ---
+
+const handleMouseDown = (e) => {
+  if (gameState.value !== 'playing') return
+  isDragging.value = true
+  bladePoints = [{ x: e.clientX, y: e.clientY }]
+}
+
+const handleMouseUp = () => {
+  isDragging.value = false
+  if (currentDragCombo >= 3) showComboEffect(currentDragCombo)
+  if (comboTimer) {
+    clearTimeout(comboTimer)
+    comboTimer = null
+  }
+  currentDragCombo = 0
+  bladePoints = []
+}
+
 const showComboEffect = (count) => {
   const bonus = count * 5
   score.value += bonus
@@ -267,26 +249,10 @@ const showComboEffect = (count) => {
   }, 1000)
 }
 
-const handleMouseDown = (e) => {
-  if (gameState.value !== 'playing') return
-  isDragging.value = true
-  bladePoints = [{ x: e.clientX, y: e.clientY }]
-}
-
-const handleMouseUp = () => {
-  if (isDragging.value && currentDragCombo >= 3) {
-    showComboEffect(currentDragCombo)
-  }
-  isDragging.value = false
-  clearTimeout(comboTimer)
-  currentDragCombo = 0
-  bladePoints = []
-}
-
 const handleMouseMove = (e) => {
   if (gameState.value !== 'playing' || !isDragging.value) return
   bladePoints.push({ x: e.clientX, y: e.clientY })
-  if (bladePoints.length > 10) bladePoints.shift()
+  if (bladePoints.length > 8) bladePoints.shift()
 }
 
 const handleTouchStart = (e) => {
@@ -300,7 +266,7 @@ const handleTouchMove = (e) => {
   if (gameState.value !== 'playing' || !isDragging.value) return
   const touch = e.touches[0]
   bladePoints.push({ x: touch.clientX, y: touch.clientY })
-  if (bladePoints.length > 10) bladePoints.shift()
+  if (bladePoints.length > 8) bladePoints.shift()
 }
 
 const startGame = () => {
@@ -310,7 +276,9 @@ const startGame = () => {
   fruits = []
   particles = []
   bladePoints = []
+  isDragging.value = false
   gameState.value = 'playing'
+
   if (gameTimer) clearInterval(gameTimer)
   gameTimer = setInterval(() => {
     timeLeft.value--
@@ -320,7 +288,13 @@ const startGame = () => {
 
 const endGame = () => {
   gameState.value = 'over'
-  clearInterval(gameTimer)
+  isDragging.value = false
+  if (comboTimer) clearTimeout(comboTimer)
+  if (gameTimer) {
+    clearInterval(gameTimer)
+    gameTimer = null
+  }
+
   if (score.value > highScore.value) {
     highScore.value = score.value
     isNewRecord.value = true
@@ -330,6 +304,7 @@ const endGame = () => {
 
 onMounted(() => {
   const canvas = canvasRef.value
+  if (!canvas) return
   const ctx = canvas.getContext('2d')
 
   const resize = () => {
@@ -340,18 +315,18 @@ onMounted(() => {
   resize()
 
   const gameLoop = () => {
+    if (!ctx) return
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
     if (gameState.value === 'playing') {
       const progress = (60 - timeLeft.value) / 60
       let fruitSpawnProb = 0.015 + progress * 0.03
+      let bombSpawnProb = 0.003 + progress * 0.015
 
-      if (Math.random() < fruitSpawnProb) {
-        fruits.push(new Fruit(canvas.width, canvas.height, progress))
-      }
-      if (Math.random() < 0.005 + progress * 0.01) {
+      const rand = Math.random()
+      if (rand < fruitSpawnProb) fruits.push(new Fruit(canvas.width, canvas.height, progress))
+      else if (rand < fruitSpawnProb + bombSpawnProb)
         fruits.push(new Bomb(canvas.width, canvas.height, progress))
-      }
 
       particles.forEach((p, i) => {
         p.update()
@@ -363,61 +338,58 @@ onMounted(() => {
         const f = fruits[i]
         f.update()
         f.draw(ctx)
-
-        // --- 优化的碰撞检测 ---
-        if (!f.isSliced && isDragging.value && bladePoints.length >= 2) {
-          const p1 = bladePoints[bladePoints.length - 2]
-          const p2 = bladePoints[bladePoints.length - 1]
-
-          if (checkLineCircleCollision(p1, p2, f)) {
-            f.isSliced = true
-            if (f instanceof Bomb) {
-              score.value = Math.max(0, score.value - 100)
-              currentDragCombo = 0
-              for (let j = 0; j < 25; j++) particles.push(new Particle(f.x, f.y, '#ff4400'))
-            } else {
-              score.value += 10
-              if (currentDragCombo === 0) {
-                comboTimer = setTimeout(() => {
-                  if (currentDragCombo >= 3) showComboEffect(currentDragCombo)
-                  currentDragCombo = 0
-                }, 300)
+        if (!f.isSliced && isDragging.value) {
+          bladePoints.forEach((p) => {
+            if (Math.hypot(f.x - p.x, f.y - p.y) < f.radius) {
+              f.isSliced = true
+              if (f instanceof Bomb) {
+                score.value = Math.max(0, score.value - 100)
+                if (comboTimer) clearTimeout(comboTimer)
+                currentDragCombo = 0
+                for (let j = 0; j < 25; j++) particles.push(new Particle(f.x, f.y, '#ff4400'))
+              } else {
+                score.value += 10
+                if (currentDragCombo === 0) {
+                  comboTimer = setTimeout(() => {
+                    if (currentDragCombo >= 3) showComboEffect(currentDragCombo)
+                    currentDragCombo = 0
+                  }, 300)
+                }
+                currentDragCombo++
+                comboLastPos = { x: f.x, y: f.y }
+                for (let j = 0; j < 12; j++) particles.push(new Particle(f.x, f.y, f.color))
               }
-              currentDragCombo++
-              comboLastPos = { x: f.x, y: f.y }
-              for (let j = 0; j < 12; j++) particles.push(new Particle(f.x, f.y, f.color))
             }
-          }
+          })
         }
         if (f.opacity <= 0 || f.y > canvas.height + 150) fruits.splice(i, 1)
       }
 
-      // 绘制刀光
       if (isDragging.value && bladePoints.length > 1) {
         ctx.save()
-        ctx.shadowBlur = 15
-        ctx.shadowColor = '#fff'
-        ctx.strokeStyle = '#fff'
-        ctx.lineWidth = 5
-        ctx.lineCap = 'round'
-        ctx.lineJoin = 'round'
         ctx.beginPath()
         ctx.moveTo(bladePoints[0].x, bladePoints[0].y)
-        for (let i = 1; i < bladePoints.length; i++) {
-          ctx.lineTo(bladePoints[i].x, bladePoints[i].y)
-        }
+        bladePoints.forEach((p) => ctx.lineTo(p.x, p.y))
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)'
+        ctx.lineWidth = 6
+        ctx.lineCap = 'round'
+        ctx.shadowBlur = 15
+        ctx.shadowColor = 'white'
         ctx.stroke()
         ctx.restore()
       }
     }
+    // 关键：保存动画句柄
     animationId = requestAnimationFrame(gameLoop)
   }
   gameLoop()
 })
 
+// --- 关键清理逻辑 ---
 onUnmounted(() => {
-  cancelAnimationFrame(animationId)
-  clearInterval(gameTimer)
+  if (animationId) cancelAnimationFrame(animationId)
+  if (gameTimer) clearInterval(gameTimer)
+  if (comboTimer) clearTimeout(comboTimer)
   window.removeEventListener('resize', () => {})
 })
 </script>
@@ -433,57 +405,75 @@ onUnmounted(() => {
   touch-action: none;
   user-select: none;
 }
-
 .stats-layer {
   position: absolute;
-  top: 25px;
+  top: 0;
   left: 0;
   width: 100%;
+  height: 100px;
   padding: 0 40px;
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   pointer-events: none;
   z-index: 15;
-  box-sizing: border-box; /* 核心修复：防止宽度溢出 */
+  box-sizing: border-box;
 }
-
 .score {
   font-family: 'Arial Black', sans-serif;
   font-size: 36px;
   color: #4bff4b;
-  text-shadow: 0 0 10px rgba(75, 255, 75, 0.5);
-  line-height: 1;
+  transition: transform 0.1s ease;
 }
-
-.high-score {
-  color: #aaa;
-  font-size: 18px;
-  margin-top: 5px;
+.beat-animation {
+  transform: scale(1.3);
+  color: #fff;
 }
-
 .timer {
   font-family: 'Arial Black', sans-serif;
   font-size: 36px;
   color: #fff;
-  text-align: right;
-  line-height: 1;
 }
-
 .timer-warning {
   color: #ff4d4d;
-  animation: pulse 0.5s infinite;
+  animation: blink 0.5s infinite;
 }
 
-@keyframes pulse {
+.combo-popup {
+  position: absolute;
+  pointer-events: none;
+  color: #ffeb3b;
+  font-family: 'Arial Black', sans-serif;
+  font-size: 32px;
+  text-shadow: 0 0 10px rgba(255, 235, 59, 0.8);
+  z-index: 30;
+  transform: translate(-50%, -50%);
+}
+.combo-fade-enter-active {
+  animation: combo-in 0.5s ease-out;
+}
+.combo-fade-leave-active {
+  animation: combo-out 0.5s ease-in forwards;
+}
+
+@keyframes combo-in {
   0% {
-    transform: scale(1);
+    transform: translate(-50%, 0) scale(0);
+    opacity: 0;
   }
-  50% {
-    transform: scale(1.1);
+  70% {
+    transform: translate(-50%, -60px) scale(1.2);
+    opacity: 1;
   }
   100% {
-    transform: scale(1);
+    transform: translate(-50%, -50px) scale(1);
+    opacity: 1;
+  }
+}
+@keyframes combo-out {
+  100% {
+    transform: translate(-50%, -100px) scale(1.5);
+    opacity: 0;
   }
 }
 
@@ -497,19 +487,48 @@ onUnmounted(() => {
   justify-content: center;
   z-index: 20;
   color: white;
-  text-align: center;
 }
-
 .title {
   font-size: 72px;
-  margin-bottom: 20px;
   color: #ff4d4d;
   font-family: 'Arial Black';
-  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+.high-score-display {
+  font-size: 24px;
+  color: #ffeb3b;
+  margin-bottom: 10px;
+}
+.bomb-warning {
+  font-size: 20px;
+  color: #ff5252;
+  margin-bottom: 30px;
+  font-weight: bold;
+}
+.new-record {
+  color: #4bff4b;
+  font-size: 28px;
+  margin-bottom: 20px;
+  animation: bounce 1s infinite;
+  font-weight: bold;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0.5;
+  }
+}
+@keyframes bounce {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
 }
 
 .menu-btn {
-  margin-top: 30px;
   padding: 20px 60px;
   font-size: 28px;
   background: #ff4d4d;
@@ -518,20 +537,7 @@ onUnmounted(() => {
   border-radius: 60px;
   cursor: pointer;
   font-family: 'Arial Black';
-  box-shadow: 0 0 20px rgba(255, 77, 77, 0.4);
 }
-
-.combo-popup {
-  position: absolute;
-  pointer-events: none;
-  color: #ffeb3b;
-  font-family: 'Arial Black', sans-serif;
-  font-size: 32px;
-  text-shadow: 0 0 10px rgba(255, 235, 59, 0.8);
-  z-index: 30;
-  transform: translate(-50%, -50%);
-}
-
 canvas {
   display: block;
 }
