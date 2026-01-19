@@ -17,8 +17,10 @@
     "@element-plus/icons-vue": "^2.3.2",
     "axios": "^1.13.2",
     "element-plus": "^2.13.0",
+    "konva": "^10.2.0",
     "pinia": "^3.0.4",
     "vue": "^3.5.26",
+    "vue-konva": "^3.3.0",
     "vue-router": "^4.6.4"
   },
   "devDependencies": {

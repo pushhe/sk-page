@@ -6,13 +6,18 @@ const router = createRouter({
     {
       path: '/',
       name: 'home',
-      component: () => import('../views/HotBoardView.vue')
+      component: () => import('../views/HotBoardView.vue'),
     },
     {
       path: '/game',
       name: 'game',
-      component: () => import('../views/SmallGame.vue')
-    }
+      component: () => import('../views/SmallGame.vue'),
+    },
+    {
+      path: '/JigsawPuzzle',
+      name: 'JigsawPuzzle',
+      component: () => import('../views/JigsawPuzzle.vue'),
+    },
   ],
 })
 
