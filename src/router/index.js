@@ -18,6 +18,11 @@ const router = createRouter({
       name: 'JigsawPuzzle',
       component: () => import('../views/JigsawPuzzle.vue'),
     },
+    {
+      path: '/PixelBeads',
+      name: 'PixelBeads',
+      component: () => import('../views/PixelBeads.vue'),
+    },
   ],
 })
 
